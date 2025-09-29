@@ -120,6 +120,13 @@ function publishLogEvent(type, engineid, processtype, processinstance, eventDeta
             DB.writeStageEvent(eventDetailsJson)
             topic = topic + '/stage_log'
             break;
+        case 'condition':
+            if (!VALIDATOR.validateConditionLogMessage(eventDetailsJson)) {
+                LOG.logWorker('WARNING', `Data is missing to write StageEvent log`, module.id)
+                return
+            }
+            topic = topic + '/stage_log'
+            break;
         case 'artifact':
             if (!VALIDATOR.validateArtifactLogMessage(eventDetailsJson)) {
                 LOG.logWorker('WARNING', `Data is missing to write ArtifactEvent log`, module.id)
@@ -400,7 +407,3 @@ module.exports = {
     initConnections: initConnections,
     onEngineStop: onEngineStop,
 };
-
-
-
-

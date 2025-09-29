@@ -389,7 +389,7 @@ var DATA = {
     update: function (invalidator) {
         var oldValue = this.value;
         var newValue = this.value;
-
+        //here
         //LogManager.logModelData(this.name, this.type, this.stage, 'UPDATE START', this.value, this.sentry);
 
         //evaluate sentry
@@ -430,6 +430,17 @@ var DATA = {
                 if (this._array_dep.length > 0)
                     Array.prototype.push.apply(dep, this._array_dep);
                 ENGINES.get(this.engineid).eventManager.emit(this.name, dep);
+            } else {
+                var engine = ENGINES.get(this.engineid)
+                var eventJson = {
+                    process_type: engine.process_type,
+                    process_id: engine.process_instance,
+                    process_perspective: engine.process_perspective,
+                    stage_name: this.stage,
+                    timestamp: Date.now(),
+                    condition: newValue
+                }
+                EVENTR.publishLogEvent('condition', this.engineid, engine.process_type, engine.process_instance, eventJson)
             }
         }
     }
@@ -453,14 +464,17 @@ var STAGE = {
         this._faults = [];
         this._childs = [];
         this._history = [];
+        this._pendingStateChange = false; //flag to track pending state changes
     },
 
-    // reset model
+    //reset model
     reset: function (resetStage) {
         if (resetStage) {
-            this.changeState('unopened');
-            this.changeStatus('regular');
-            this.changeCompliance('onTime');
+            this._beginStateChanges();
+            this._changeState('unopened');
+            this._changeStatus('regular');
+            this._changeCompliance('onTime');
+            this._commitStateChanges();
         }
         //recursively reset all child stages
         for (var ch in this._childs) {
@@ -483,14 +497,14 @@ var STAGE = {
     },
 
     logStageState: function () {
-        var eventid = STAGE_EVENT_ID.get(this.engineid) + 1
-        STAGE_EVENT_ID.set(this.engineid, eventid)
+        var eventid = STAGE_EVENT_ID.get(this.engineid) + 1;
+        STAGE_EVENT_ID.set(this.engineid, eventid);
 
-        const elements = this.engineid.split('__')
-        const elements2 = elements[0].split('/')
-        const process_type = elements2[0]
-        const process_instance = elements2[1]
-        const process_perspective = elements[1]
+        const elements = this.engineid.split('__');
+        const elements2 = elements[0].split('/');
+        const process_type = elements2[0];
+        const process_instance = elements2[1];
+        const process_perspective = elements[1];
 
         var eventJson = {
             process_type: process_type,
@@ -503,11 +517,25 @@ var STAGE = {
             state: this.state,
             compliance: this.compliance,
             whole: ENGINES.get(this.engineid).Stage_array
-        }
-        EVENTR.publishLogEvent('stage', this.engineid, process_type, process_instance, eventJson)
+        };
+        EVENTR.publishLogEvent('stage', this.engineid, process_type, process_instance, eventJson);
     },
 
-    changeState: function (newState) {
+    //begin a batch of state changes
+    _beginStateChanges: function() {
+        this._pendingStateChange = true;
+    },
+
+    //commit state changes and emit event - only once per update
+    _commitStateChanges: function() {
+        if (this._pendingStateChange) {
+            this._pendingStateChange = false;
+            this.logStageState();
+        }
+    },
+
+    //internal state change methods that don't emit events
+    _changeState: function (newState) {
         var oldState = this.state;
         this.state = newState;
         this.timestamp = Date.now();
@@ -516,13 +544,9 @@ var STAGE = {
         rev.oldValue = oldState;
         rev.newValue = newState;
         this._history.push(rev);
-        //reset stage if re-opened
-        if (oldState == 'closed' && (newState == 'opened' || newState == 'unopened')) {
-            this.reset(false);
-        }
-        this.logStageState()
     },
-    changeCompliance: function (newCompliance) {
+
+    _changeCompliance: function (newCompliance) {
         var oldCompliance = this.compliance;
         this.compliance = newCompliance;
         this.timestamp = Date.now();
@@ -531,9 +555,9 @@ var STAGE = {
         rev.oldValue = oldCompliance;
         rev.newValue = newCompliance;
         this._history.push(rev);
-        this.logStageState()
     },
-    changeStatus: function (newStatus) {
+
+    _changeStatus: function (newStatus) {
         var oldStatus = this.status;
         this.status = newStatus;
         this.timestamp = Date.now();
@@ -542,8 +566,32 @@ var STAGE = {
         rev.oldValue = oldStatus;
         rev.newValue = newStatus;
         this._history.push(rev);
-        this.logStageState()
     },
+
+    //public methods that manage state changes with event emission
+    changeState: function (newState) {
+        this._beginStateChanges();
+        this._changeState(newState);
+        this._commitStateChanges();
+        
+        //reset stage if re-opened
+        if (oldState == 'closed' && (newState == 'opened' || newState == 'unopened')) {
+            this.reset(false);
+        }
+    },
+    
+    changeCompliance: function (newCompliance) {
+        this._beginStateChanges();
+        this._changeCompliance(newCompliance);
+        this._commitStateChanges();
+    },
+    
+    changeStatus: function (newStatus) {
+        this._beginStateChanges();
+        this._changeStatus(newStatus);
+        this._commitStateChanges();
+    },
+
     //verify if a stage should be opened (if it should transition from 'Unopened' to 'Opened')
     checkUnopenedToOpened: function () {
         //parent stage must be opened (or undefined -> no parent exists)
@@ -647,22 +695,25 @@ var STAGE = {
     },
     //update the lifecycle of the stage (called by the engine when a dependency between the current stage and another elment that changed is detected)
     update: function () {
+        this._beginStateChanges(); //start batch of state changes
+        var oldState = this.state;
+        
         //if stage is unopened
         if (this.state == 'unopened') {
             //determine if it should be opened
             if (this.checkUnopenedToOpened()) {
                 //open stage
-                this.changeState('opened');
+                this._changeState('opened');
                 //check compliance (execution order)
                 if (this.compliance == 'onTime' && this.checkOnTimeOutOfOrder()) {
                     //incorrect execution order
-                    this.changeCompliance('outOfOrder');
+                    this._changeCompliance('outOfOrder');
                     //find if there were stages that were skipped
                     this.setUnopenedOnTimeRegularToSkipped();
                 }
                 else if (this.compliance == 'skipped') {
                     //if the stage was 'skipped', then it will always be 'outOfOrder'
-                    this.changeCompliance('outOfOrder');
+                    this._changeCompliance('outOfOrder');
                     this.setUnopenedOnTimeRegularToSkipped();
                 }
             }
@@ -671,11 +722,11 @@ var STAGE = {
         else if (this.state == 'opened') {
             //check if it has become faulty
             if (this.status == 'regular' && this.checkRegularToFaulty()) {
-                this.changeStatus('faulty');
+                this._changeStatus('faulty');
             }
             //check if it must be closed
             if (this.checkOpenedToClosed()) {
-                this.changeState('closed');
+                this._changeState('closed');
             }
         }
         //if stage is closed
@@ -684,13 +735,21 @@ var STAGE = {
             if (this.checkClosedToOpened()) {
                 //evaluate compliance before resetting stage (and inner elements)
                 var checkOnTimeOutOfOrder_checkClosedToOpened = this.checkOnTimeOutOfOrder();
-                this.changeState('opened');
+                this._changeState('opened');
                 if (this.compliance == 'onTime' && checkOnTimeOutOfOrder_checkClosedToOpened) {
                     //if compliance was not met, then set stage as 'outOfOrder' 
-                    this.changeCompliance('outOfOrder');
+                    this._changeCompliance('outOfOrder');
                     this.setUnopenedOnTimeRegularToSkipped();
                 }
             }
+        }
+        
+        //only commit if state actually changed
+        this._commitStateChanges();
+        
+        //fix for reset logic when reopening
+        if (oldState == 'closed' && (this.state == 'opened' || this.state == 'unopened')) {
+            this.reset(false);
         }
 
         //handle closing of all child stages if current stage is closed

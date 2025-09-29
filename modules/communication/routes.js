@@ -99,7 +99,6 @@ app.get('*', function (req, res) {
     res.sendFile('index.html', { root: path.join(__dirname, 'public') });
 });
 
-
 const rest_api = app.listen(LOCAL_HTTP_PORT, () => {
     LOG.logWorker(`DEBUG`, `Worker listening on port ${LOCAL_HTTP_PORT}`, module.id)
 })

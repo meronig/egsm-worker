@@ -48,7 +48,7 @@ var REQUEST_PROMISES = new Map()
  * @param {string} message 
  * @returns -
  */
-function onMessageReceived(hostname, port, topic, message) {
+async function onMessageReceived(hostname, port, topic, message) {
     LOG.logWorker('DEBUG', `New message received from topic: ${topic}`, module.id)
     if ((hostname != MQTT_HOST || port != MQTT_PORT) || (topic != SUPERVISOR_TO_WORKERS && topic != TOPIC_SELF && topic != AGGREGATORS_TO_WORKERS)) {
         LOG.logWorker('DEBUG', `Reveived message is not intended to handle here`, module.id)
@@ -196,7 +196,7 @@ function onMessageReceived(hostname, port, topic, message) {
                 break;
             case 'NEW_ENGINE':
                 LOG.logWorker('DEBUG', `NEW_ENGINE requested`, module.id)
-                var resPayload = createNewEngine(msgJson['payload'])
+                var resPayload = await createNewEngine(msgJson['payload'])
                 var response = {
                     request_id: msgJson['request_id'],
                     payload: resPayload,
@@ -229,14 +229,15 @@ function onMessageReceived(hostname, port, topic, message) {
  * @param {Object} payload The received payload in the request which contains all information and files which are necessary to create a new engine instance
  * @returns SUCCESS or ERROR objects with the appropriate message
  */
-function createNewEngine(payload) {
+async function createNewEngine(payload) {
     LOG.logWorker('DEBUG', 'New engine creation requested', module.id)
     var responsePayload = {}
 
     //Check once again if the worker can serve one more engine
     if (!EGSM_ENGINE.hasFreeSlot()) {
         LOG.logWorker('WARNING', 'Request cancelled. Out of free Engine slots', module.id)
-        return responsePayload['error'] = 'NO_SLOT'
+        responsePayload['error'] = 'NO_SLOT'
+        return responsePayload
     }
 
     //Check if necessary data fields are available
@@ -251,7 +252,8 @@ function createNewEngine(payload) {
     if (typeof engine_id == "undefined" || typeof stakeholders == "undefined" || typeof mqtt_broker == "undefined" || mqtt_broker == "undefined" || typeof mqtt_port == "undefined"
         || typeof mqtt_user == "undefined" || typeof mqtt_password == "undefined") {
         LOG.logWorker('WARNING', 'Engine creation request cancelled. Argument(s) are missing', module.id)
-        return responsePayload['error'] = 'ARGUMENT_MISSING'
+        responsePayload['error'] = 'ARGUMENT_MISSING'
+        return responsePayload
     }
 
     //Check if each necessary files are available
@@ -261,7 +263,8 @@ function createNewEngine(payload) {
 
     if (typeof informalModel == 'undefined' || typeof processModel == 'undefined' || typeof eventRouterConfig == 'undefined') {
         LOG.logWorker('WARNING', 'Engine creation request cancelled. Necessary files have not received, process cannot be initiated!', module.id)
-        return responsePayload['error'] = 'FILE_MISSING'
+        responsePayload['error'] = 'FILE_MISSING'
+        return responsePayload
     }
 
     //Everything is provided, creating new engine
@@ -269,13 +272,15 @@ function createNewEngine(payload) {
     //Check if there is any engine with the same engine id
     if (EGSM_ENGINE.exists(engine_id)) {
         LOG.logWorker('WARNING', `Engine with id [${engine_id}] is already exists, could not created again`, module.id)
-        return responsePayload['error'] = 'ENGINE_ID_CONFLICT'
+        responsePayload['error'] = 'ENGINE_ID_CONFLICT'
+        return responsePayload
     }
     //Check if the broker connection exists and create it is if not
     var result = MQTT.createConnection(mqtt_broker, mqtt_port, mqtt_user, mqtt_password, 'ntstmqtt_' + Math.random().toString(16).substr(2, 8));
     if (!result) {
         LOG.logWorker('WARNING', 'Error while creating connection', module.id)
-        return responsePayload['error'] = 'BROKER_CONN_ERROR'
+        responsePayload['error'] = 'BROKER_CONN_ERROR'
+        return responsePayload
     }
     if (result == 'created') {
         LOG.logWorker('DEBUG', 'New broker connection created for the new engine', module.id)
@@ -290,19 +295,22 @@ function createNewEngine(payload) {
     //Adding Engine to the Event Router
     EVENT_ROUTER.initConnections(engine_id, eventRouterConfig)
 
-    //Creating new engine
-    EGSM_ENGINE.createNewEngine(engine_id, informalModel, processModel, stakeholders).then(
-        function (value) {
-            if (value == 'created') {
-                LOG.logWorker('DEBUG', 'New engine created', module.id)
-                return responsePayload['success'] = 'ENGINE_CREATED'
-            }
-            else {
-                LOG.logWorker('WARNING', 'Unhandled error while creating new engine', module.id)
-                return responsePayload['error'] = 'ERROR_WHILE_CREATING_ENGINE'
-            }
+    //Creating new engine - PROPERLY AWAIT THIS
+    try {
+        var value = await EGSM_ENGINE.createNewEngine(engine_id, informalModel, processModel, stakeholders)
+        if (value == 'created') {
+            LOG.logWorker('DEBUG', 'New engine created', module.id)
+            responsePayload['success'] = 'ENGINE_CREATED'
+        } else {
+            LOG.logWorker('WARNING', 'Unhandled error while creating new engine', module.id)
+            responsePayload['error'] = 'ERROR_WHILE_CREATING_ENGINE'
         }
-    )
+    } catch (error) {
+        LOG.logWorker('ERROR', `Error creating engine: ${error}`, module.id)
+        responsePayload['error'] = 'ERROR_WHILE_CREATING_ENGINE'
+    }
+    
+    return responsePayload
 }
 
 /**
@@ -352,7 +360,7 @@ async function initPrimaryBrokerConnection(broker) {
     //Find an unused, unique ID for the Engine
     while (true) {
         TOPIC_SELF = UUID.v4();
-        MQTT.subscribeTopic(MQTT_HOST, MQTT_PORT, TOPIC_SELF)
+        await MQTT.subscribeTopic(MQTT_HOST, MQTT_PORT, TOPIC_SELF)
         var result = await checkIdCandidate(TOPIC_SELF)
         if (result == 'ok') {
             break;
@@ -361,8 +369,8 @@ async function initPrimaryBrokerConnection(broker) {
             MQTT.unsubscribeTopic(MQTT_HOST, MQTT_PORT, TOPIC_SELF)
         }
     }
-    MQTT.subscribeTopic(MQTT_HOST, MQTT_PORT, SUPERVISOR_TO_WORKERS)
-    MQTT.subscribeTopic(MQTT_HOST, MQTT_PORT, AGGREGATORS_TO_WORKERS)
+    await MQTT.subscribeTopic(MQTT_HOST, MQTT_PORT, SUPERVISOR_TO_WORKERS)
+    await MQTT.subscribeTopic(MQTT_HOST, MQTT_PORT, AGGREGATORS_TO_WORKERS)
     return TOPIC_SELF
 }
 
