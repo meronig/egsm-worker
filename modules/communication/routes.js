@@ -10,8 +10,8 @@ module.id = "ROUTES"
 var LOCAL_HOST_NAME = 'localhost' //TODO: retrieve it properly
 
 LOG.logWorker('DEBUG', 'Finding a port to open REST API', module.id)
-const MIN_PORT = 8000
-const MAX_PORT = 60000
+const MIN_PORT = 9001
+const MAX_PORT = 9200
 var LOCAL_HTTP_PORT = Math.floor(Math.random() * (MAX_PORT - MIN_PORT + 1) + MIN_PORT);
 LOG.logWorker('DEBUG', `Using port ${LOCAL_HTTP_PORT} to open REST API`, module.id)
 

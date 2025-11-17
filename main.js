@@ -8,7 +8,7 @@ var egsmengine = require('./modules/egsmengine/egsmengine');
 var DBCONFIG = require('./modules/egsm-common/database/databaseconfig');
 var CONNCONFIG = require('./modules/egsm-common/config/connectionconfig');
 
-const CONFIG_FILE = './config.xml'
+const CONFIG_FILE = './config/config.xml'
 
 module.id = "MAIN"
 
@@ -22,7 +22,8 @@ LOG.logWorker('DEBUG', 'Worker started', module.id)
 
 var WORKER_ID = ''
 
-var broker = new PRIM.Broker('localhost', 1883, '', '')
+//var broker = new PRIM.Broker('localhost', 1883, '', '')
+var broker = CONNCONFIG.getConfig().primary_broker
 
 LOG.logWorker('DEBUG', 'Finding a unique ID by active cooperation with peers...', module.id)
 MQTTCOMM.initPrimaryBrokerConnection(broker).then((result) => {
